@@ -15,7 +15,7 @@ from utils.inference_utils import run_on_batch
 ganspace_pca = torch.load('ganspace_pca/ffhq_pca.pt')
 
 ROOT_DIR = os.getcwd()
-CODE_DIR = '/home/yakovdan/win/FinalProject/restyle_encoder'
+CODE_DIR = ROOT_DIR+'/restyle_encoder'
 sys.path.append(CODE_DIR)
 os.chdir(f'{CODE_DIR}')
 
@@ -228,22 +228,24 @@ def process_image_by_id(editor, image_id, debug=False):
     toc = time.time()
     print('Processing landmarks took {:.4f} seconds.'.format(toc - tic))
     tic = time.time()
-    error_flag = False
+    error_code = 0
     if len(ecc_list) < 20:
-        error_flag = True
-    if error_flag or not estimate_convexity(ecc_list):
         output_image = tensor2im(transformed_PIL_image)
         output_image.save(f"../DataSet/Errors/{image_id}.jpg")
-        status_flag = False
+        error_code = 1
+    elif not estimate_convexity(ecc_list):
+        output_image = tensor2im(transformed_PIL_image)
+        output_image.save(f"../DataSet/Errors/{image_id}.jpg")
+        error_code = 2
     else:
         min_idx = np.argmin(ecc_list) - 2
         output_image = tensor2im(result_batch[0][-1])
         output_image.save(f"../DataSet/Open/{image_id}.jpg")
         cv2.imwrite(f"../DataSet/Close/{image_id}.jpg", image_list_color[min_idx])
-        status_flag = True
+        error_code = 0
     toc = time.time()
     print('File I/O took {:.4f} seconds.'.format(toc - tic))
-    return status_flag
+    return error_code
 
 experiment_type = 'ffhq_encode'
 
@@ -353,7 +355,7 @@ for idx in range(0, 1000):
     tic = time.time()
     status = process_image_by_id(editor, 37000+idx)
     with open('summary.txt', 'a') as summary_file:
-        summary_file.write(f"{idx}: {status}\n")
+        summary_file.write(f"{idx}: {str(status)}\n")
     toc = time.time()
     print(idx, status, (toc-tic))
 
