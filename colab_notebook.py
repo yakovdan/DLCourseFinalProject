@@ -352,14 +352,11 @@ def plot_ellipse(x_coordinates, y_coordinates, z_coordinates):
     plt.ylabel('Y')
 
 
-for idx in range(899, 900):
+for idx in range(0, 1000):
     tic = time.time()
     status = process_image_by_id(editor, 37000+idx, debug=True)
     with open('summary.txt', 'a') as summary_file:
         summary_file.write(f"{idx}: {str(status)}\n")
     toc = time.time()
     print(idx, status, (toc-tic))
-    if status != 0:
-        break
-
 
