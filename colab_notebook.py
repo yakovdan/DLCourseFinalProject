@@ -144,7 +144,7 @@ def estimate_convexity(ecc_list):
     vertex = -b / (2*a)
     min_idx = np.argmin(np.array(ecc_list))
     print(f"vertex: {vertex}, min_idx: {min_idx}")
-    return np.abs(min_idx - vertex) < 10, vertex, min_idx
+    return vertex < 0, vertex, min_idx
 
 
 
