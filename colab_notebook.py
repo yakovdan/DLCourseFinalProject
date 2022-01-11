@@ -26,6 +26,29 @@ import dlib
 from scripts.align_faces_parallel import align_face
 
 
+def fit_parabola(ecc_list):
+    l = len(ecc_list)
+    ecc_list_np = np.array(ecc_list).reshape(l,1)
+    x = np.array(list(range(len(ecc_list)))).reshape(l, 1)
+    x2 =np.array([t ** 2 for t in x]).reshape(l, 1)
+    ones = np.ones_like(x)
+    mat = np.concatenate([x2, x, ones], axis=1)
+    sol = np.linalg.lstsq(mat, ecc_list_np, rcond='warn')
+    return sol
+
+
+
+
+def compare_sizes(item1, item2):
+    x1, y1 = item1[0]
+    x2, y2 = item1[1]
+    diag1 = (x2-x1)**2 + (y2-y1)**2
+    x3, y3 = item2[0]
+    x4, y4 = item2[1]
+    diag2 = (x4 - x3) ** 2 + (y4 - y3) ** 2
+    return diag1 > diag2
+
+
 def plot_ellipse(x_coordinates, y_coordinates, z_coordinates):
     plt.contour(x_coordinates, y_coordinates, z_coordinates, levels=[1], colors='r', linewidths=2)
     plt.legend()
@@ -37,6 +60,10 @@ def extract_left_eye_landmark(img_gray_list):
     landmarks_list = []
     for gray_image in img_gray_list:
         rects = detector(gray_image, 1)
+        # sometimes more than one rectangle is returned. select the largest
+        if len(rects) > 1:
+            sorted(rects, key=lambda r: r.area(), reverse=True)
+            rects = rects[0:1]
         left_eye_landmarks_list = []
         for (i, rect) in enumerate(rects):
             shape = predictor(gray_image, rect)
@@ -109,17 +136,13 @@ def derivative(points):
         derivate_list.append(value)
     return derivate_list
 
+
 def estimate_convexity(ecc_list):
-    der1 = derivative(ecc_list)
-    der2 = derivative(der1)
-    der2_np_abs = np.abs(np.array(der2))
-    q1, q9 = np.quantile(der2_np_abs, [0.1, 0.9])
-    a = (der2_np_abs > q1)
-    b = (der2_np_abs < q9)
-    c = a & b
-    der2_filt = der2_np_abs[c]
-    normalized_sum = 100 * np.sum(der2_filt) / len(der2_filt)
-    return normalized_sum < 0.5
+    sol = fit_parabola(ecc_list)
+    a, b, c = sol[0]
+    vertex = -b / (2*a)
+    min_idx = np.argmin(np.array(ecc_list))
+    return np.abs(min_idx - vertex) < (len(ecc_list) // 10)
 
 
 
@@ -190,7 +213,13 @@ def run_alignment(image_path):
 # id in [37000, 37999]
 def process_image_by_id(editor, image_id, debug=False):
     filename = f'../FFHQ/37000/{str(image_id)}.jpg'
-    aligned_PIL_image = run_alignment(filename)
+    try:
+        aligned_PIL_image = run_alignment(filename)
+    except Exception:
+        output_image = cv2.imread(filename)
+        cv2.imwrite(f"../DataSet/Errors/3/{image_id}.jpg", output_image)
+        return 3
+
     transformed_PIL_image = img_transforms(aligned_PIL_image)
     # perform inversion
     with torch.no_grad():
@@ -224,6 +253,7 @@ def process_image_by_id(editor, image_id, debug=False):
         centered, x_center, y_center = map_to_center(landmark_list)
         x, y, z, mat = fit_ellipse_to_eye(centered)
         w, _ = np.linalg.eig(mat)
+        plt.contour(x, y, z, levels=[1], colors=('r'), linewidths=2)
         ecc_list.append(w[0]/w[1])
     toc = time.time()
     print('Processing landmarks took {:.4f} seconds.'.format(toc - tic))
@@ -231,11 +261,11 @@ def process_image_by_id(editor, image_id, debug=False):
     error_code = 0
     if len(ecc_list) < 20:
         output_image = tensor2im(transformed_PIL_image)
-        output_image.save(f"../DataSet/Errors/{image_id}.jpg")
+        output_image.save(f"../DataSet/Errors/1/{image_id}.jpg")
         error_code = 1
     elif not estimate_convexity(ecc_list):
         output_image = tensor2im(transformed_PIL_image)
-        output_image.save(f"../DataSet/Errors/{image_id}.jpg")
+        output_image.save(f"../DataSet/Errors/2/{image_id}.jpg")
         error_code = 2
     else:
         min_idx = np.argmin(ecc_list) - 2
@@ -298,16 +328,6 @@ opts.n_iters_per_batch = 5
 opts.resize_outputs = False  # generate outputs at full resolution
 
 
-# with torch.no_grad():
-#     avg_image = get_avg_image(net)
-#     tic = time.time()
-#     result_batch, result_latents = run_on_batch(transformed_image.unsqueeze(0).cuda(), net, opts, avg_image)
-#     toc = time.time()
-#     print('Inference took {:.4f} seconds.'.format(toc - tic))
-#
-# resize_amount = (256, 256) if opts.resize_outputs else (opts.output_size, opts.output_size)
-# res = get_coupled_results(result_batch, transformed_image, resize_amount)
-
 
 FFHQ_PATH = ROOT_DIR + "/FFHQ/"
 image_directory = "37000/"
@@ -332,31 +352,14 @@ def plot_ellipse(x_coordinates, y_coordinates, z_coordinates):
     plt.ylabel('Y')
 
 
-# def extract_left_eye_landmark(img_gray_list):
-#     landmarks_list = []
-#     for gray_image in img_gray_list:
-#         rects = detector(gray_image, 1)
-#         left_eye_landmarks_list = []
-#         for (i, rect) in enumerate(rects):
-#             shape = predictor(gray_image, rect)
-#             shape = face_utils.shape_to_np(shape)
-#             left_eye = face_utils.FACIAL_LANDMARKS_68_IDXS['left_eye']
-#             for j, (x, y) in enumerate(shape):
-#                 if j in range(left_eye[0], left_eye[1]):
-#                     #cv2.circle(image_eyesopened_np, (x, y), 1, (0, 255, 0), -1)
-#                     left_eye_landmarks_list.append((x, y))
-#             landmarks_list.append(left_eye_landmarks_list)
-#     return landmarks_list
-
-# KNONW BAD: 122
-
-
-for idx in range(0, 1000):
+for idx in range(899, 900):
     tic = time.time()
-    status = process_image_by_id(editor, 37000+idx)
+    status = process_image_by_id(editor, 37000+idx, debug=True)
     with open('summary.txt', 'a') as summary_file:
         summary_file.write(f"{idx}: {str(status)}\n")
     toc = time.time()
     print(idx, status, (toc-tic))
+    if status != 0:
+        break
 
 
