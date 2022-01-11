@@ -12,6 +12,7 @@ import torchvision.transforms as transforms
 from e4e_editings import latent_editor # note: e4e editings, not restyle editings
 from utils.inference_utils import run_on_batch
 
+
 ganspace_pca = torch.load('ganspace_pca/ffhq_pca.pt')
 
 ROOT_DIR = os.getcwd()
@@ -142,7 +143,8 @@ def estimate_convexity(ecc_list):
     a, b, c = sol[0]
     vertex = -b / (2*a)
     min_idx = np.argmin(np.array(ecc_list))
-    return np.abs(min_idx - vertex) < (len(ecc_list) // 10)
+    print(f"vertex: {vertex}, min_idx: {min_idx}")
+    return np.abs(min_idx - vertex) < 10, vertex, min_idx
 
 
 
@@ -218,7 +220,7 @@ def process_image_by_id(editor, image_id, debug=False):
     except Exception:
         output_image = cv2.imread(filename)
         cv2.imwrite(f"../DataSet/Errors/3/{image_id}.jpg", output_image)
-        return 3
+        return 3, -1, -1
 
     transformed_PIL_image = img_transforms(aligned_PIL_image)
     # perform inversion
@@ -262,20 +264,22 @@ def process_image_by_id(editor, image_id, debug=False):
     if len(ecc_list) < 20:
         output_image = tensor2im(transformed_PIL_image)
         output_image.save(f"../DataSet/Errors/1/{image_id}.jpg")
-        error_code = 1
-    elif not estimate_convexity(ecc_list):
-        output_image = tensor2im(transformed_PIL_image)
-        output_image.save(f"../DataSet/Errors/2/{image_id}.jpg")
-        error_code = 2
+        error_code, v, i = 1, -1, -1
     else:
-        min_idx = np.argmin(ecc_list) - 2
-        output_image = tensor2im(result_batch[0][-1])
-        output_image.save(f"../DataSet/Open/{image_id}.jpg")
-        cv2.imwrite(f"../DataSet/Close/{image_id}.jpg", image_list_color[min_idx])
-        error_code = 0
+        convex_status, v, i = estimate_convexity(ecc_list)
+        if not convex_status:
+            output_image = tensor2im(transformed_PIL_image)
+            output_image.save(f"../DataSet/Errors/2/{image_id}.jpg")
+            error_code = 2
+        else:
+            min_idx = np.argmin(ecc_list) - 2
+            output_image = tensor2im(result_batch[0][-1])
+            output_image.save(f"../DataSet/Open/{image_id}.jpg")
+            cv2.imwrite(f"../DataSet/Close/{image_id}.jpg", image_list_color[min_idx])
+            error_code = 0
     toc = time.time()
     print('File I/O took {:.4f} seconds.'.format(toc - tic))
-    return error_code
+    return error_code, v, i
 
 experiment_type = 'ffhq_encode'
 
@@ -351,12 +355,28 @@ def plot_ellipse(x_coordinates, y_coordinates, z_coordinates):
     plt.xlabel('X')
     plt.ylabel('Y')
 
+count_good = 0
+count_bad = 0
 
-for idx in range(0, 1000):
+start_idx  = 0
+end_idx = 1000
+if len(sys.argv) == 3:
+    start_idx = int(sys.argv[1])
+    end_idx = int(sys.argv[2])
+
+for idx in range(start_idx, end_idx):
     tic = time.time()
-    status = process_image_by_id(editor, 37000+idx, debug=True)
-    with open('summary.txt', 'a') as summary_file:
-        summary_file.write(f"{idx}: {str(status)}\n")
+    status, vertex, min_idx = process_image_by_id(editor, 37000+idx, debug=True)
+    if status == 0:
+        count_good += 1
+    else:
+        count_bad += 1
+    if idx == 0:
+        fileusage ='w'
+    else:
+        fileusage = 'a'
+    with open('summary.txt', fileusage) as summary_file:
+        summary_file.write(f"{idx}: {str(status)}, vertex : {vertex}, min_idx: {min_idx}\n")
     toc = time.time()
-    print(idx, status, (toc-tic))
+    print(idx, status, (toc-tic), 100*count_bad/count_good)
 
