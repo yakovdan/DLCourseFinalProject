@@ -233,12 +233,12 @@ def generate_images(classification_model, num_images,
 
         img_test = (img_test.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
         img_test = img_test[0].cpu().numpy()
-        temp_image_test = Image.fromarray(img_test, 'RGB')
-        temp_image_test.save("tempimage.jpg", "JPEG")
-        img = img_test
+        #temp_image_test = Image.fromarray(img_test, 'RGB')
+        #temp_image_test.save("tempimage.jpg", "JPEG")
+
 
         try:
-            aligned_image = align_face(filepath="tempimage.jpg", predictor=predictor)
+            aligned_image = align_face(img_test, predictor=predictor)
             open_cv_image_aligned = np.array(aligned_image)
             # Convert RGB to BGR
             open_cv_image_aligned = open_cv_image_aligned[:, :, ::-1].copy()
@@ -679,10 +679,10 @@ generate_images(model_ft, 500)
 #     G = legacy.load_network_pkl(f)['G_ema'].to(device)  # type: ignore
 #
 # label = torch.zeros([1, G.c_dim], device=device)
-# all_w = np.load('/home/yakovdan/win/FinalProject/w_500.npy')
+# all_w = np.load('/home/yakovdan/win/FinalProject/w_40000.npy')
 # boundary = torch.tensor(np.load('/home/yakovdan/win/FinalProject/boundary.npy')).cuda()
-# w_idx = 488
-# for factor in range(-10, 10, 1):
+# w_idx = 33780
+# for factor in range(0, 20, 1):
 #     w = torch.tensor(all_w[w_idx, :]).float().cuda().reshape([1, 18, 512])
 #     w = w + factor*boundary
 #     img_test = G.synthesis(w, noise_mode='const')
