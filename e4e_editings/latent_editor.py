@@ -1,5 +1,6 @@
 import torch
 import sys
+import time
 sys.path.append(".")
 sys.path.append("..")
 from e4e_editings import ganspace, sefa
@@ -40,6 +41,7 @@ class LatentEditor(object):
             images, _ = self.generator([latents], randomize_noise=False, input_is_latent=True)
             if self.is_cars:
                 images = images[:, :, 64:448, :]  # 512x512 -> 384x512
-        horizontal_concat_image = torch.cat(list(images), 2)
-        final_image = tensor2im(horizontal_concat_image)
-        return final_image
+        #horizontal_concat_image = torch.cat(list(images), 2)
+        #final_image = tensor2im(horizontal_concat_image)
+        final_images = [tensor2im(x) for x in list(images)]
+        return final_images
