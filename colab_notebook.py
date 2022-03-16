@@ -16,9 +16,20 @@ from torchvision import datasets, models, transforms
 from e4e_editings import latent_editor # note: e4e editings, not restyle editings
 from utils.inference_utils import run_on_batch
 import legacy
-# used seeds: [0, 42]
-torch.manual_seed(99)
-np.random.seed(99)
+
+#############################
+# flags for operating modes
+##############################
+generate_classified_images = False
+apply_interfacegan = False
+GANSpace_eye_open_test = False
+instantiate_classifer = False
+#####################
+# define some consts
+######################
+
+torch.manual_seed(110)
+np.random.seed(110)
 
 ganspace_pca = torch.load('ganspace_pca/ffhq_pca.pt')
 
@@ -32,18 +43,19 @@ from restyle_encoder.models.psp import pSp
 from restyle_encoder.models.e4e import e4e
 import dlib
 import re
-from scripts.align_faces_parallel import align_face
+from align_faces_parallel import align_face
 
 from ibug.face_detection import RetinaFacePredictor
 from ibug.face_parsing import FaceParser as RTNetPredictor
 
-
+###############################
+# For dlib landmark extractor #
+###############################
 
 face_detector = RetinaFacePredictor(threshold=0.8, device="cuda",
                                     model=(RetinaFacePredictor.get_model('mobilenet0.25')))
 face_parser = RTNetPredictor(
     device="cuda", ckpt=None, encoder="rtnet50", decoder="fcn", num_classes=11)
-
 
 def face_area(face):
     return (face[2] - face[0]) * (face[3] - face[1])
@@ -99,11 +111,19 @@ def segment_face(frame):
     frame_copy[:, :, 2][ind4] = 0
     return frame_copy
 
+#####################
+# For classifier ####
+#####################
+
 def set_parameter_requires_grad(model, feature_extracting):
     if feature_extracting:
         for param in model.parameters():
             param.requires_grad = False
 
+
+########################
+# initialize clssifier #
+########################
 
 def initialize_model(model_name, num_classes, feature_extract, use_pretrained=True):
     # Initialize these variables which will be set in this if statement. Each of these
@@ -188,12 +208,16 @@ def num_range(s: str) -> List[int]:
     vals = s.split(',')
     return [int(x) for x in vals]
 
+########################################################################
+# generate images from StyleGAN 2 and sort using classifier            #
+########################################################################
+
 
 def generate_images(classification_model, num_images,
                     network_pkl: str = '/home/yakovdan/win/FinalProject/pretrained/ffhq.pkl',
                     truncation_psi: float = 1,
                     noise_mode: str = "const",  # ['const', 'random', 'none']
-                    outdir: str = "/home/yakovdan/win/stylegan2_output_2901_0100/"):
+                    outdir: str = "/home/yakovdan/win/stylegan2_output_3101_0000/"):
     predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
 
     softmax = nn.Softmax(dim = 1)
@@ -214,8 +238,6 @@ def generate_images(classification_model, num_images,
     all_pred_vals = []
 
     # Generate images.
-    #np.random.RandomState(seeds[image_idx % len(seeds)])
-    #np.random.RandomState(97)
     image_idx = 0
     total_tries = 0
     actual_tries = 0
@@ -225,16 +247,8 @@ def generate_images(classification_model, num_images,
         w_samples = G.mapping(z, None)  # [N, L, C]
         img_test = G.synthesis(w_samples, noise_mode='const')
 
-        # img = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
-        # img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-        # img = img[0].cpu().numpy()
-        # temp_image = Image.fromarray(img, 'RGB')
-        # temp_image.save("tempimage.jpg", "JPEG")
-
         img_test = (img_test.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
         img_test = img_test[0].cpu().numpy()
-        #temp_image_test = Image.fromarray(img_test, 'RGB')
-        #temp_image_test.save("tempimage.jpg", "JPEG")
 
 
         try:
@@ -298,6 +312,10 @@ def displayPIL(p):
     img_np = np.array(p)
     displayNP(img_np)
 
+###########################################
+# estimate convexity by fitting parabola  #
+# to eccentricies list                    #
+###########################################
 
 def fit_parabola(ecc_list):
     l = len(ecc_list)
@@ -308,8 +326,6 @@ def fit_parabola(ecc_list):
     mat = np.concatenate([x2, x, ones], axis=1)
     sol = np.linalg.lstsq(mat, ecc_list_np, rcond='warn')
     return sol
-
-
 
 
 def compare_sizes(item1, item2):
@@ -328,6 +344,11 @@ def plot_ellipse(x_coordinates, y_coordinates, z_coordinates):
     plt.xlabel('X')
     plt.ylabel('Y')
 
+
+#####################################
+# use dlib to extract eye landmarks #
+# from grayscale image of face      #
+#####################################
 
 def extract_left_eye_landmark(img_gray_list):
     landmarks_list = []
@@ -376,6 +397,9 @@ def coeffs_to_mat(coeffs):
     mat_form = [[A, B/2], [B/2, C]]
     return np.array(mat_form)
 
+#################################
+# fit ellipse to eye landmarks  #
+#################################
 
 def fit_ellipse_to_eye(points_list):
     # Extract x coords and y coords of the ellipse as column vectors
@@ -387,15 +411,10 @@ def fit_ellipse_to_eye(points_list):
     b = np.ones_like(X)
     x = np.linalg.lstsq(A, b)[0].squeeze()
 
-    # Print the equation of the ellipse in standard form
-    #print('The ellipse is given by {0:.3}x^2 + {1:.3}xy+{2:.3}y^2+{3:.3}x+{4:.3}y = 1'.format(x[0], x[1],x[2],x[3],x[4]))
-
-    # Plot the noisy data
-    #plt.scatter(X, Y, label='Data Points')
 
 
     # Plot the least squares ellipse
-    x_coord = np.linspace(-100, 100, 300)
+    x_coord = np.linspace(-200, 200, 300)
     y_coord = np.linspace(-25, 20, 300)
     X_coord, Y_coord = np.meshgrid(x_coord, y_coord)
     Z_coord = x[0] * X_coord ** 2 + x[1] * X_coord * Y_coord + x[2] * Y_coord**2 + x[3] * X_coord + x[4] * Y_coord
@@ -405,16 +424,6 @@ def fit_ellipse_to_eye(points_list):
     return X_coord, Y_coord, Z_coord, mat
 
 
-def derivative(points):
-    if len(points) < 3:
-        return []
-    derivate_list = []
-    for idx in range(1, len(points)-1):
-        value = (points[idx+1] - points[idx-1]) / 2
-        derivate_list.append(value)
-    return derivate_list
-
-
 def estimate_convexity(ecc_list):
     sol = fit_parabola(ecc_list)
     a, b, c = sol[0]
@@ -422,7 +431,6 @@ def estimate_convexity(ecc_list):
     min_idx = np.argmin(np.array(ecc_list))
     print(f"vertex: {vertex}, min_idx: {min_idx}")
     return vertex > 0, vertex, min_idx
-
 
 
 # this function takes an image and an encoder as parameters
@@ -483,7 +491,12 @@ def run_alignment(image_path):
     print("Aligned image has shape: {}".format(aligned_image.size))
     return aligned_image
 
-# id in [37000, 37999]
+##############################################
+# given an id for an image from ffhq,
+# run the step size estimation algorithm on it
+# and output result
+##############################################
+
 def process_image_by_id(editor, image_id, debug=False):
     filename = f'../SourceImages/{image_id:05d}.jpg'
     aligned_PIL_image = Image.open(filename)
@@ -500,8 +513,8 @@ def process_image_by_id(editor, image_id, debug=False):
     image_list_color = []
     tic = time.time()
     steps = list(range(0, 80, 3))
-    for step_idx in range(0, len(steps), 4):
-        steps1 = steps[step_idx:step_idx+4]
+    for step_idx in range(0, len(steps), 2):
+        steps1 = steps[step_idx:step_idx+2]
         closed_eyes_image_color_np, close_eyes_image_gray_np = close_eyes_by_amount(editor, ganspace_pca, result_latents, steps1)
         image_list.extend(close_eyes_image_gray_np)
         image_list_color.extend(closed_eyes_image_color_np)
@@ -513,18 +526,22 @@ def process_image_by_id(editor, image_id, debug=False):
     print('Closing steps took {:.4f} seconds.'.format(toc - tic))
     tic = time.time()
     all_landmarks = extract_left_eye_landmark(image_list)
+
     toc = time.time()
     print('Extracting left eye landmarks took {:.4f} seconds.'.format(toc - tic))
     ecc_list = []
     tic = time.time()
-    for landmark_list in all_landmarks:
+    for idx , landmark_list in enumerate(all_landmarks):
         if len(landmark_list) != 6:
             continue
         centered, x_center, y_center = map_to_center(landmark_list)
         x, y, z, mat = fit_ellipse_to_eye(centered)
         w, _ = np.linalg.eig(mat)
-        plt.contour(x, y, z, levels=[1], colors=('r'), linewidths=2)
+        plt.contour(x, y, z, levels=[1], colors=[(idx*7, 0, 0)], linewidths=2)
         ecc_list.append(w[0]/w[1])
+    plt.show()
+    plt.plot(list(range(len(ecc_list))), ecc_list)
+    plt.show()
     toc = time.time()
     print('Processing landmarks took {:.4f} seconds.'.format(toc - tic))
     tic = time.time()
@@ -549,8 +566,10 @@ def process_image_by_id(editor, image_id, debug=False):
     print('File I/O took {:.4f} seconds.'.format(toc - tic))
     return error_code, v, i
 
+#############################
+#### meta data for ffhq   ###
+#############################
 experiment_type = 'ffhq_encode'
-
 
 EXPERIMENT_DATA_ARGS = {
     "ffhq_encode": {
@@ -564,27 +583,21 @@ EXPERIMENT_DATA_ARGS = {
 
 }
 
-
+#####################
+# load e4e encoder ##
+#####################
 
 EXPERIMENT_ARGS = EXPERIMENT_DATA_ARGS[experiment_type]
-
-
 model_path = EXPERIMENT_ARGS['model_path']
 ckpt = torch.load(model_path, map_location='cpu')
-
 opts = ckpt['opts']
 pprint.pprint(opts)
-
 
 # update the training options
 opts['checkpoint_path'] = model_path
 
-
 opts = Namespace(**opts)
-if experiment_type == 'horse_encode':
-    net = e4e(opts)
-else:
-    net = pSp(opts)
+net = pSp(opts)
 
 net.eval()
 net.cuda()
@@ -594,14 +607,13 @@ editor = latent_editor.LatentEditor(net.decoder, False)
 
 image_path = EXPERIMENT_DATA_ARGS[experiment_type]["image_path"]
 img_transforms = EXPERIMENT_ARGS['transform']
-# original_image = Image.open(image_path).convert("RGB")
-# original_image = original_image.resize((256, 256))
-# input_image = run_alignment(image_path)
-# transformed_image = img_transforms(input_image)
+original_image = Image.open(image_path).convert("RGB")
+original_image = original_image.resize((256, 256))
+input_image = run_alignment(image_path)
+transformed_image = img_transforms(input_image)
 
 opts.n_iters_per_batch = 5
 opts.resize_outputs = False  # generate outputs at full resolution
-
 
 
 FFHQ_PATH = ROOT_DIR + "/FFHQ/"
@@ -631,143 +643,103 @@ def plot_ellipse(x_coordinates, y_coordinates, z_coordinates):
 # GENERATE CLOSED EYES PICTURE  #
 #################################
 
-# count_good = 0
-# count_bad = 0
-#
-# start_idx  = 0
-# end_idx = 1000
-# if len(sys.argv) == 3:
-#     start_idx = int(sys.argv[1])
-#     end_idx = int(sys.argv[2])
-# a = os.getcwd()
-# a = a +"/../SourceImages/idlist.txt"
-#
-# with open(a,'r') as idfile:
-#     file_ids = idfile.readlines()
-# file_ids = [int(x) for x in file_ids][6750:]
-# for image_counter, idx in enumerate(file_ids):#range(start_idx, end_idx):
-#     tic = time.time()
-#     status, vertex, min_idx = process_image_by_id(editor, idx, debug=True)
-#     if status == 0:
-#         count_good += 1
-#     else:
-#         count_bad += 1
-#     with open('summary.txt', 'a') as summary_file:
-#         summary_file.write(f"{idx}: {str(status)}, vertex : {vertex}, min_idx: {min_idx}\n")
-#     toc = time.time()
-#     print(idx, status, (toc-tic), 100*count_bad/(image_counter+1), image_counter+1)
+count_good = 0
+count_bad = 0
+
+start_idx  = 0
+end_idx = 1000
+if len(sys.argv) == 3:
+    start_idx = int(sys.argv[1])
+    end_idx = int(sys.argv[2])
+a = os.getcwd()
+a = a +"/../SourceImages/idlist.txt"
+
+with open(a,'r') as idfile:
+    file_ids = idfile.readlines()
+file_ids = [int(x) for x in file_ids][6750:]
+for image_counter, idx in enumerate(file_ids):#range(start_idx, end_idx):
+    tic = time.time()
+    status, vertex, min_idx = process_image_by_id(editor, idx, debug=True)
+    if status == 0:
+        count_good += 1
+    else:
+        count_bad += 1
+    with open('summary.txt', 'a') as summary_file:
+        summary_file.write(f"{idx}: {str(status)}, vertex : {vertex}, min_idx: {min_idx}\n")
+    toc = time.time()
+    print(idx, status, (toc-tic), 100*count_bad/(image_counter+1), image_counter+1)
 
 ############################
 # SAMPLE FROM LATENT SPACE #
 ############################
 #Initialize the model for this run
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-model_ft, input_size = initialize_model("resnet", 2, True, use_pretrained=True)
-data_dict = torch.load("/home/yakovdan/win/FinalProject/DataSet_all_aligned_and_segmented/best_classifier.pt")
-model_ft.load_state_dict(data_dict['state_dict'])
-model_ft = model_ft.to(device)
-model_ft.eval()
-classifier_transforms = transforms.Compose([transforms.Resize(input_size),
-                                            transforms.CenterCrop(input_size),
-                                            transforms.ToTensor(),
-                                            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
-
+if instantiate_classifer:
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    model_ft, input_size = initialize_model("resnet", 2, True, use_pretrained=True)
+    data_dict = torch.load("/home/yakovdan/win/FinalProject/DataSet_all_aligned_and_segmented/best_classifier.pt")
+    model_ft.load_state_dict(data_dict['state_dict'])
+    model_ft = model_ft.to(device)
+    model_ft.eval()
+    classifier_transforms = transforms.Compose([transforms.Resize(input_size),
+                                                transforms.CenterCrop(input_size),
+                                                transforms.ToTensor(),
+                                                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
+#
 
 #test_img = cv2.imread("/home/yakovdan/win/FinalProject/"+'image_00103.jpg')
-generate_images(model_ft, 500)
-# with dnnlib.util.open_url('/home/yakovdan/win/FinalProject/pretrained/ffhq.pkl') as f:
-#     G = legacy.load_network_pkl(f)['G_ema'].to(device)  # type: ignore
-#
-# label = torch.zeros([1, G.c_dim], device=device)
-# all_w = np.load('/home/yakovdan/win/FinalProject/w_40000.npy')
-# boundary = torch.tensor(np.load('/home/yakovdan/win/FinalProject/boundary.npy')).cuda()
-# w_idx = 33780
-# for factor in range(0, 20, 1):
-#     w = torch.tensor(all_w[w_idx, :]).float().cuda().reshape([1, 18, 512])
-#     w = w + factor*boundary
-#     img_test = G.synthesis(w, noise_mode='const')
-#     img_test = (img_test.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-#     img_test = img_test[0].cpu().numpy()
-#     temp_image_test = Image.fromarray(img_test, 'RGB')
-#     temp_image_test.save(f"/home/yakovdan/win/test_output/test_{w_idx}_{factor}.jpeg", "JPEG")
 
-# done_flag = False
-# for idx in range(1000):
-#     z = torch.from_numpy(np.random.randn(1, G.z_dim)).to(device)
-#     img = G(z, label, truncation_psi=1, noise_mode="const")
-#     img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-#     img = img[0].cpu().numpy()
-#     temp_image = Image.fromarray(img, 'RGB')
-#     temp_image.save(f"/home/yakovdan/win/FinalProject/images_for_test/image_{idx}.jpg")
-#     z1 = z.cpu().numpy()
-#     np.save(f'/home/yakovdan/win/FinalProject/images_for_test/latent_{idx}', z1)
-# z1 = z.cpu().numpy()
-# np.save('latent_test2', z1)
+if generate_classified_images:
+    generate_images(model_ft, 500)
+with dnnlib.util.open_url('/home/yakovdan/win/FinalProject/pretrained/ffhq.pkl') as f:
+     G = legacy.load_network_pkl(f)['G_ema'].to(device)  # type: ignore
 
-# z2 = torch.tensor(np.load('/home/yakovdan/win/FinalProject/latent_164.npy')).cuda()
-# z3 = z2 + 5 * boundary
-# torch.manual_seed(100)
-# np.random.seed(100)
-#
-# img = G(z2, label, truncation_psi=1, noise_mode="const")
-# img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-# img = img[0].cpu().numpy()
-# temp_image = Image.fromarray(img, 'RGB')
-# plt.imshow(temp_image)
-# plt.show()
-#
-# img = G(z3, label, truncation_psi=1, noise_mode="const")
-# img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-# img = img[0].cpu().numpy()
-# temp_image = Image.fromarray(img, 'RGB')
-# plt.imshow(temp_image)
-# plt.show()
-#
-# print("done")
+if apply_interfacegan:
+    boundary = torch.tensor(np.load('/home/yakovdan/win/FinalProject/boundary.npy')).cuda()
+    w0 = torch.load('/home/yakovdan/win/e4e_dataset_test/processing/latent_00003.pt')
+    w1 = torch.load('/home/yakovdan/win/e4e_dataset_test/processing/latent_00004.pt')
+    w2 = torch.load('/home/yakovdan/win/e4e_dataset_test/processing/latent_00006.pt')
+    w3 = torch.load('/home/yakovdan/win/e4e_dataset_test/processing/latent_00010.pt')
+    w_list = [w0, w1, w2, w3]
+
+    for i in range(4):
+        print(f"Running : {i}")
+        for factor in range(-10, 10, 1):
+            print(f"Computing : {factor}")
+            w = w_list[i].reshape((1, 18, 512))
+            w = w + factor*boundary
+            img_test = G.synthesis(w, noise_mode='const')
+            img_test = (img_test.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
+            img_test = img_test[0].cpu().numpy()
+            temp_image_test = Image.fromarray(img_test, 'RGB')
+            temp_image_test.save(f"/home/yakovdan/win/e4e_dataset_test/processing/output_{i}_{factor}.jpeg", "JPEG")
+
 ###########################################
 # Open Eyes Using PCA
 ############################################
 
-# image_yakov = run_alignment('/home/yakovdan/win/FinalProject/yakov_closed_eyes.jpg')
-# image_bibi = run_alignment('/home/yakovdan/win/FinalProject/bibi.jpg')
-# #
-# #
-# with torch.no_grad():
-#     tic = time.time()
-#     result_batch_yakov, result_latents_yakov = run_on_batch(img_transforms(image_yakov).unsqueeze(0).cuda(), net, opts, avg_image)
-#     toc = time.time()
-#     print('Inference took {:.4f} seconds.'.format(toc - tic))
-#
-# with torch.no_grad():
-#     tic = time.time()
-#     result_batch_bibi, result_latents_bibi = run_on_batch(img_transforms(image_bibi).unsqueeze(0).cuda(), net, opts, avg_image)
-#     toc = time.time()
-#     print('Inference took {:.4f} seconds.'.format(toc - tic))
-
-# np.save('latent_bibi', result_latents_bibi[0])
-# np.save('latent_yakov', result_latents_yakov[0])
-#
-# for v in np.arange(0, -80, -10):
-#     directions = [(54,  7,  8,  20+s) for s in [v]]
-#     image_eyesclosed = editor.apply_ganspace([torch.from_numpy(result_latents_yakov[0][-1]).cuda()], ganspace_pca, directions)
-#     plt.imshow(image_eyesclosed[0])
-#     plt.show()
+if GANSpace_eye_open_test:
+    # image_yakov = run_alignment('/home/yakovdan/win/FinalProject/yakov_closed_eyes.jpg')
+    # image_bibi = run_alignment('/home/yakovdan/win/FinalProject/bibi.jpg')
+    # image_00003 = run_alignment('/home/yakovdan/win/e4e_dataset_test/processing/image_00003.jpeg')
+    # image_00004 = run_alignment('/home/yakovdan/win/e4e_dataset_test/processing/image_00004.jpeg')
+    # image_00006 = run_alignment('/home/yakovdan/win/e4e_dataset_test/processing/image_00006.jpeg')
+    # image_00010 = run_alignment('/home/yakovdan/win/e4e_dataset_test/processing/image_00010.jpeg')
+    # images = [image_00003, image_00004, image_00006, image_00010]
+    w0 = torch.load('/home/yakovdan/win/e4e_dataset_test/processing/latent_00003.pt')
+    w1 = torch.load('/home/yakovdan/win/e4e_dataset_test/processing/latent_00004.pt')
+    w2 = torch.load('/home/yakovdan/win/e4e_dataset_test/processing/latent_00006.pt')
+    w3 = torch.load('/home/yakovdan/win/e4e_dataset_test/processing/latent_00010.pt')
+    w_list = [w0, w1, w2, w3]
 
 
 
-# plt.imshow(tensor2im(result_batch_trump[0][-1]))
-# plt.show()
-# plt.imshow(tensor2im(result_batch_yakov[0][-1]))
-# plt.show()
+    for idx, w in enumerate(w_list):
+        for v in np.arange(0, -150, -10):
+            directions = [(54,  7,  8,  20+s) for s in [v]]
+            image_eyesclosed = editor.apply_ganspace([w.reshape(18, 512)], ganspace_pca, directions)
+            np_img = np.array(image_eyesclosed[0])
+            cv2.imwrite(f'/home/yakovdan/win/e4e_dataset_test/GANSpace/image_{idx}_{v}.jpeg', cv2.resize(cv2.cvtColor(np_img, cv2.COLOR_RGB2BGR), dsize=(256, 256)))
 
-################################
-# Generate Images from latents #
-##################################
-# latents = np.load('/home/yakovdan/win/FinalProject/latents_b.npy')
-# #vec = np.load('/home/yakovdan/win/FinalProject/latents_b.npy')[-1]
-# for i, vec in enumerate(latents):
-#     print(i)
-#     vec1 = vec.reshape((1, 512))
-#     image = editor._latents_to_image(torch.tensor(vec1).float().to("cuda"))
-#     plt.imshow(image[0])
-#     plt.show()
+
+
+
